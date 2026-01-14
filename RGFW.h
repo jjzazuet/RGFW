@@ -8588,10 +8588,13 @@ i32 RGFW_initPlatform_Wayland(void) {
 
 void RGFW_deinitPlatform_Wayland(void) {
 	#ifdef RGFW_LIBDECOR
-		/* Don't free the libdecor context here - it's stored in a static variable
-		   and must persist across RGFW init/deinit cycles to avoid GTK re-initialization crashes.
-		   The context will be cleaned up when the process exits. */
-		_RGFW->decorContext = NULL;
+		/* Free the libdecor context if it was created.
+		   Note: We don't unref it here because the frame already did it,
+		   or it was never successfully created. Just clear the pointer. */
+		if (_RGFW->decorContext) {
+			libdecor_unref(_RGFW->decorContext);
+			_RGFW->decorContext = NULL;
+		}
 	#endif
 
 	if (_RGFW->clipboard) {
@@ -8789,9 +8792,10 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 	/* Check decoration path BEFORE creating xdg surfaces */
 	/* libdecor needs to create its own xdg_surface */
 	#ifdef RGFW_LIBDECOR
-		/* Static variables persist across RGFW init/deinit cycles to prevent GTK re-initialization issues */
+		/* Static flag persists across RGFW init/deinit cycles.
+		   Once GTK/libdecor initialization fails, we skip libdecor for all future windows
+		   to avoid GTK re-initialization crashes ("cannot register existing type 'GdkDisplayManager'"). */
 		static RGFW_bool decorInitFailed = RGFW_FALSE;
-		static struct libdecor* staticDecorContext = NULL;
 		
 	if (!_RGFW->decoration_manager && !(flags & RGFW_windowNoBorder) && !decorInitFailed) {
 			static struct libdecor_interface interface = {
@@ -8805,12 +8809,10 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 				.dismiss_popup = RGFW_wl_libdecor_dismiss_popup,
 			};
 
-			/* Initialize libdecor context once (use static to persist across RGFW init/deinit) */
-			if (staticDecorContext == NULL) {
-				staticDecorContext = libdecor_new(_RGFW->wl_display, &interface);
-			}
-			/* Copy to RGFW struct for use elsewhere */
-			_RGFW->decorContext = staticDecorContext;
+			/* Create a new libdecor context for this window.
+			   NOTE: We can't cache the context because it's bound to a specific wl_display,
+			   and each RGFW init creates a new wl_display. */
+			_RGFW->decorContext = libdecor_new(_RGFW->wl_display, &interface);
 			
 			if (_RGFW->decorContext) {
 				win->src.decorFrame = libdecor_decorate(_RGFW->decorContext, win->src.surface, &frameInterface, win);
@@ -8849,14 +8851,6 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 						
 						/* Increment decorated window count for event dispatching */
 						_RGFW->decorWindowCount++;
-						
-						/* CRITICAL: Mark libdecor as "used" to prevent GTK re-initialization.
-						   libdecor_decorate() internally calls GTK init. If GTK init fails (common 
-						   in embedded terminals like Cursor), calling libdecor_decorate() again 
-						   for subsequent windows crashes with "cannot register existing type 'GdkDisplayManager'".
-						   By setting decorInitFailed=true, we force subsequent windows to use 
-						   borderless mode (manual xdg-shell), avoiding the GTK crash. */
-						decorInitFailed = RGFW_TRUE;
 						
 						/* Process initial configuration */
 						wl_display_roundtrip(_RGFW->wl_display);
