@@ -2839,6 +2839,7 @@ RGFWDEF RGFW_info* RGFW_getInfo(void);
 
 		#ifdef RGFW_LIBDECOR
 			struct libdecor* decorContext;
+			struct libdecor_frame* decorFrame;
 		#endif
 #endif /* RGFW_WAYLAND */
 	};
@@ -7926,6 +7927,74 @@ static void RGFW_wl_xdg_decoration_configure_handler(void* data,
 	}
 }
 
+#ifdef RGFW_LIBDECOR
+/* libdecor callback implementations for client-side decorations */
+static void RGFW_wl_libdecor_configure(struct libdecor_frame *frame,
+		struct libdecor_configuration *configuration, void *user_data) {
+	RGFW_window* win = (RGFW_window*)user_data;
+	if (!win || !frame || !configuration) return;
+
+	int width = 0, height = 0;
+	/* Get the configured size from libdecor */
+	if (libdecor_configuration_get_content_size(configuration, frame, &width, &height)) {
+		/* Configuration specifies a size */
+		if (width > 0 && height > 0) {
+			win->w = width;
+			win->h = height;
+		}
+	} else {
+		/* Use current window size if no size specified */
+		width = win->w;
+		height = win->h;
+	}
+
+	/* Handle window states (maximized, fullscreen, etc.) */
+	enum libdecor_window_state window_state;
+	if (libdecor_configuration_get_window_state(configuration, &window_state)) {
+		win->src.pending_activated = (window_state & LIBDECOR_WINDOW_STATE_ACTIVE) != 0;
+		win->src.pending_maximized = (window_state & LIBDECOR_WINDOW_STATE_MAXIMIZED) != 0;
+	}
+
+	/* Create a state object and commit it */
+	struct libdecor_state *state = libdecor_state_new(width, height);
+	if (state) {
+		libdecor_frame_commit(frame, state, configuration);
+		libdecor_state_free(state);
+	}
+
+	/* Trigger resize event */
+	win->src.resizing = RGFW_TRUE;
+}
+
+static void RGFW_wl_libdecor_close(struct libdecor_frame *frame, void *user_data) {
+	RGFW_UNUSED(frame);
+	RGFW_window* win = (RGFW_window*)user_data;
+	if (!win) return;
+
+	if (!win->internal.shouldClose) {
+		RGFW_window_setShouldClose(win, RGFW_TRUE);
+		RGFW_windowQuitCallback(win);
+	}
+}
+
+static void RGFW_wl_libdecor_commit(struct libdecor_frame *frame, void *user_data) {
+	RGFW_UNUSED(frame);
+	RGFW_window* win = (RGFW_window*)user_data;
+	if (!win || !win->src.surface) return;
+
+	/* Commit the surface after decoration changes */
+	wl_surface_commit(win->src.surface);
+}
+
+static void RGFW_wl_libdecor_dismiss_popup(struct libdecor_frame *frame,
+		const char *seat_name, void *user_data) {
+	RGFW_UNUSED(frame);
+	RGFW_UNUSED(seat_name);
+	RGFW_UNUSED(user_data);
+	/* No popup handling needed for basic window functionality */
+}
+#endif /* RGFW_LIBDECOR */
+
 static void RGFW_wl_shm_format_handler(void* data, struct wl_shm *shm, u32 format) {
 	RGFW_UNUSED(data); RGFW_UNUSED(shm); RGFW_UNUSED(format);
 }
@@ -8693,10 +8762,6 @@ void RGFW_FUNC(RGFW_window_captureMousePlatform) (RGFW_window* win, RGFW_bool st
 RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_windowFlags flags, RGFW_window* win) {
 	RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_warningWayland, "RGFW Wayland support is experimental");
 
-	static const struct xdg_surface_listener xdg_surface_listener = {
-		.configure = RGFW_wl_xdg_surface_configure_handler,
-	};
-
 	static const struct wl_surface_listener wl_surface_listener = {
 		.enter = RGFW_wl_surface_enter,
 		.leave = (void (*)(void *, struct wl_surface *, struct wl_output *))&RGFW_doNothing,
@@ -8709,6 +8774,70 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 
 	/* create a surface for a custom cursor */
 	win->src.custom_cursor_surface = wl_compositor_create_surface(_RGFW->compositor);
+
+	/* Check decoration path BEFORE creating xdg surfaces */
+	/* libdecor needs to create its own xdg_surface */
+	if (!_RGFW->decoration_manager && !(flags & RGFW_windowNoBorder)) {
+		#ifdef RGFW_LIBDECOR
+			static struct libdecor_interface interface = {
+				.error = NULL,
+			};
+
+			static struct libdecor_frame_interface frameInterface = {
+				.configure = RGFW_wl_libdecor_configure,
+				.close = RGFW_wl_libdecor_close,
+				.commit = RGFW_wl_libdecor_commit,
+				.dismiss_popup = RGFW_wl_libdecor_dismiss_popup,
+			};
+
+			win->src.decorContext = libdecor_new(_RGFW->wl_display, &interface);
+			if (win->src.decorContext) {
+				win->src.decorFrame = libdecor_decorate(win->src.decorContext, win->src.surface, &frameInterface, win);
+				if (!win->src.decorFrame) {
+					RGFW_sendDebugInfo(RGFW_typeError, RGFW_errWayland, "libdecor_decorate failed - no decoration plugin available");
+					libdecor_unref(win->src.decorContext);
+					win->src.decorContext = NULL;
+					#ifdef RGFW_LIBDECOR_REQUIRED
+						/* Fail if libdecor decorations are required */
+						wl_surface_destroy(win->src.surface);
+						wl_surface_destroy(win->src.custom_cursor_surface);
+						return NULL;
+					#endif
+					/* Fall through to manual xdg-shell creation (borderless) */
+				} else {
+					libdecor_frame_set_app_id(win->src.decorFrame, "RGFW-application");
+					libdecor_frame_set_title(win->src.decorFrame, (const char*)name);
+					
+					/* Extract xdg surfaces from libdecor frame */
+					win->src.xdg_surface = libdecor_frame_get_xdg_surface(win->src.decorFrame);
+					win->src.xdg_toplevel = libdecor_frame_get_xdg_toplevel(win->src.decorFrame);
+					
+					/* Map the frame */
+					libdecor_frame_map(win->src.decorFrame);
+					
+					/* Process initial configuration */
+					wl_display_roundtrip(_RGFW->wl_display);
+					
+					RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "Window created with libdecor decorations");
+					RGFW_UNUSED(name);
+					return win; /* libdecor manages xdg-shell, skip manual creation */
+				}
+			} else {
+				RGFW_sendDebugInfo(RGFW_typeError, RGFW_errWayland, "libdecor_new failed - libdecor not available");
+				#ifdef RGFW_LIBDECOR_REQUIRED
+					/* Fail if libdecor decorations are required */
+					wl_surface_destroy(win->src.surface);
+					wl_surface_destroy(win->src.custom_cursor_surface);
+					return NULL;
+				#endif
+			}
+		#endif
+	}
+
+	/* Manual xdg-shell creation (for xdg-decoration protocol or borderless) */
+	static const struct xdg_surface_listener xdg_surface_listener = {
+		.configure = RGFW_wl_xdg_surface_configure_handler,
+	};
 
 	win->src.xdg_surface = xdg_wm_base_get_xdg_surface(_RGFW->xdg_wm_base, win->src.surface);
 	xdg_surface_add_listener(win->src.xdg_surface, &xdg_surface_listener, win);
@@ -8730,9 +8859,7 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 
 	xdg_toplevel_add_listener(win->src.xdg_toplevel, &xdg_toplevel_listener, win);
 
-	/* compositor supports both SSD & CSD
-	   So choose accordingly
-	 */
+	/* compositor supports xdg-decoration protocol for SSD */
 	if (_RGFW->decoration_manager) {
 		u32 decoration_mode = ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
 		win->src.decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(
@@ -8750,34 +8877,6 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 		}
 
 		zxdg_toplevel_decoration_v1_set_mode(win->src.decoration, decoration_mode);
-
-        /* no xdg_decoration support */
-	} else if (!(flags & RGFW_windowNoBorder)) {
-		/* TODO, some fallback */
-		#ifdef RGFW_LIBDECOR
-			static struct libdecor_interface interface = {
-				.error = NULL,
-			};
-
-			static struct libdecor_frame_interface frameInterface = {0}; /*= {
-				RGFW_wl_handle_configure,
-				RGFW_wl_handle_close,
-				RGFW_wl_handle_commit,
-				RGFW_wl_handle_dismiss_popup,
-			};*/
-
-			win->src.decorContext = libdecor_new(_RGFW->wl_display, &interface);
-			if (win->src.decorContext) {
-				struct libdecor_frame *frame = libdecor_decorate(win->src.decorContext, win->src.surface, &frameInterface, win);
-				if (!frame) {
-					libdecor_unref(win->src.decorContext);
-					win->src.decorContext = NULL;
-				} else {
-					libdecor_frame_set_app_id(frame, "my-libdecor-app");
-					libdecor_frame_set_title(frame, "My Libdecor Window");
-				}
-			}
-		#endif
 	}
 
 	if (_RGFW->icon_manager != NULL) {
@@ -8840,6 +8939,7 @@ void RGFW_FUNC(RGFW_window_resize) (RGFW_window* win, i32 w, i32 h) {
 	win->h = h;
 	if (_RGFW->compositor) {
 		xdg_surface_set_window_geometry(win->src.xdg_surface, 0, 0, win->w, win->h);
+		wl_surface_commit(win->src.surface); /* Commit changes to make compositor apply them */
 		#ifdef RGFW_OPENGL
 		if (win->src.ctx.egl)
 			wl_egl_window_resize(win->src.ctx.egl->eglWindow, (i32)w, (i32)h, 0, 0);
