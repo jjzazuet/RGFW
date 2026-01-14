@@ -8588,10 +8588,10 @@ i32 RGFW_initPlatform_Wayland(void) {
 
 void RGFW_deinitPlatform_Wayland(void) {
 	#ifdef RGFW_LIBDECOR
-		if (_RGFW->decorContext) {
-			libdecor_unref(_RGFW->decorContext);
-			_RGFW->decorContext = NULL;
-		}
+		/* Don't free the libdecor context here - it's stored in a static variable
+		   and must persist across RGFW init/deinit cycles to avoid GTK re-initialization crashes.
+		   The context will be cleaned up when the process exits. */
+		_RGFW->decorContext = NULL;
 	#endif
 
 	if (_RGFW->clipboard) {
@@ -8788,8 +8788,12 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 
 	/* Check decoration path BEFORE creating xdg surfaces */
 	/* libdecor needs to create its own xdg_surface */
-	if (!_RGFW->decoration_manager && !(flags & RGFW_windowNoBorder)) {
-		#ifdef RGFW_LIBDECOR
+	#ifdef RGFW_LIBDECOR
+		/* Static variables persist across RGFW init/deinit cycles to prevent GTK re-initialization issues */
+		static RGFW_bool decorInitFailed = RGFW_FALSE;
+		static struct libdecor* staticDecorContext = NULL;
+		
+	if (!_RGFW->decoration_manager && !(flags & RGFW_windowNoBorder) && !decorInitFailed) {
 			static struct libdecor_interface interface = {
 				.error = NULL,
 			};
@@ -8801,15 +8805,19 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 				.dismiss_popup = RGFW_wl_libdecor_dismiss_popup,
 			};
 
-			/* Initialize global libdecor context once */
-			if (_RGFW->decorContext == NULL) {
-				_RGFW->decorContext = libdecor_new(_RGFW->wl_display, &interface);
+			/* Initialize libdecor context once (use static to persist across RGFW init/deinit) */
+			if (staticDecorContext == NULL) {
+				staticDecorContext = libdecor_new(_RGFW->wl_display, &interface);
 			}
+			/* Copy to RGFW struct for use elsewhere */
+			_RGFW->decorContext = staticDecorContext;
 			
 			if (_RGFW->decorContext) {
 				win->src.decorFrame = libdecor_decorate(_RGFW->decorContext, win->src.surface, &frameInterface, win);
 				if (!win->src.decorFrame) {
 					RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "libdecor_decorate failed - no decoration plugin available, falling back to borderless window");
+					/* Mark init as failed to avoid GTK re-initialization issues */
+					decorInitFailed = RGFW_TRUE;
 					#ifdef RGFW_LIBDECOR_REQUIRED
 						/* Fail if libdecor decorations are required */
 						wl_surface_destroy(win->src.surface);
@@ -8832,6 +8840,8 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 						win->src.decorFrame = NULL;
 						win->src.xdg_surface = NULL;
 						win->src.xdg_toplevel = NULL;
+						/* Mark init as failed to avoid GTK re-initialization issues */
+						decorInitFailed = RGFW_TRUE;
 						/* Fall through to manual xdg-shell creation */
 					} else {
 						/* Map the frame */
@@ -8839,6 +8849,14 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 						
 						/* Increment decorated window count for event dispatching */
 						_RGFW->decorWindowCount++;
+						
+						/* CRITICAL: Mark libdecor as "used" to prevent GTK re-initialization.
+						   libdecor_decorate() internally calls GTK init. If GTK init fails (common 
+						   in embedded terminals like Cursor), calling libdecor_decorate() again 
+						   for subsequent windows crashes with "cannot register existing type 'GdkDisplayManager'".
+						   By setting decorInitFailed=true, we force subsequent windows to use 
+						   borderless mode (manual xdg-shell), avoiding the GTK crash. */
+						decorInitFailed = RGFW_TRUE;
 						
 						/* Process initial configuration */
 						wl_display_roundtrip(_RGFW->wl_display);
@@ -8850,6 +8868,8 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 				}
 			} else {
 				RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "libdecor_new failed - falling back to borderless window");
+				/* Mark init as failed to avoid GTK re-initialization issues */
+				decorInitFailed = RGFW_TRUE;
 				#ifdef RGFW_LIBDECOR_REQUIRED
 					/* Fail if libdecor decorations are required */
 					wl_surface_destroy(win->src.surface);
