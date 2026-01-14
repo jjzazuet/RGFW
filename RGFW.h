@@ -7976,8 +7976,10 @@ static void RGFW_wl_libdecor_configure(struct libdecor_frame *frame,
 		libdecor_state_free(state);
 	}
 
-	/* Trigger resize event */
-	win->src.resizing = RGFW_TRUE;
+	/* Trigger resize callback directly for libdecor windows.
+	   Unlike xdg-shell windows, libdecor doesn't go through the xdg_surface configure handler,
+	   so we need to call the resize callback here. */
+	RGFW_windowResizedCallback(win, width, height);
 }
 
 static void RGFW_wl_libdecor_close(struct libdecor_frame *frame, void *user_data) {
