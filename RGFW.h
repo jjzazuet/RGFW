@@ -7932,6 +7932,10 @@ static void RGFW_wl_xdg_decoration_configure_handler(void* data,
 }
 
 #ifdef RGFW_LIBDECOR
+/* Track if libdecor has working plugins (GTK initialized successfully).
+   Set in configure callback if we receive valid window state. */
+static RGFW_bool libdecorHasWorkingPlugins = RGFW_FALSE;
+
 /* libdecor callback implementations for client-side decorations */
 static void RGFW_wl_libdecor_configure(struct libdecor_frame *frame,
 		struct libdecor_configuration *configuration, void *user_data) {
@@ -7953,10 +7957,16 @@ static void RGFW_wl_libdecor_configure(struct libdecor_frame *frame,
 	}
 
 	/* Handle window states (maximized, fullscreen, etc.) */
-	enum libdecor_window_state window_state;
+	enum libdecor_window_state window_state = 0;
 	if (libdecor_configuration_get_window_state(configuration, &window_state)) {
 		win->src.pending_activated = (window_state & LIBDECOR_WINDOW_STATE_ACTIVE) != 0;
 		win->src.pending_maximized = (window_state & LIBDECOR_WINDOW_STATE_MAXIMIZED) != 0;
+		/* Only consider plugins working if we got actual state (ACTIVE, MAXIMIZED, etc.).
+		   In fallback mode (no GTK), libdecor still calls configure but with empty state (0).
+		   We check for ACTIVE specifically since a real window manager will activate the window. */
+		if (window_state != 0) {
+			libdecorHasWorkingPlugins = RGFW_TRUE;
+		}
 	}
 
 	/* Create a state object and commit it */
@@ -8809,10 +8819,12 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 				.dismiss_popup = RGFW_wl_libdecor_dismiss_popup,
 			};
 
-			/* Create a new libdecor context for this window.
-			   NOTE: We can't cache the context because it's bound to a specific wl_display,
-			   and each RGFW init creates a new wl_display. */
-			_RGFW->decorContext = libdecor_new(_RGFW->wl_display, &interface);
+			/* Reuse existing libdecor context within a session, or create a new one.
+			   All windows in a session share the same wl_display, so we can reuse the context.
+			   On RGFW deinit, decorContext is freed, and a new session gets a fresh one. */
+			if (_RGFW->decorContext == NULL) {
+				_RGFW->decorContext = libdecor_new(_RGFW->wl_display, &interface);
+			}
 			
 			if (_RGFW->decorContext) {
 				win->src.decorFrame = libdecor_decorate(_RGFW->decorContext, win->src.surface, &frameInterface, win);
@@ -8852,8 +8864,20 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 						/* Increment decorated window count for event dispatching */
 						_RGFW->decorWindowCount++;
 						
-						/* Process initial configuration */
+						/* Process initial configuration - this triggers the configure callback */
 						wl_display_roundtrip(_RGFW->wl_display);
+						
+						/* Check if libdecor has working plugins (GTK initialized).
+						   The configure callback sets libdecorHasWorkingPlugins=true if it
+						   received valid window state from libdecor.
+						   
+						   - If true: GTK works, allow future libdecor_new calls (all windows get decorations)
+						   - If false: GTK failed (fallback mode), set decorInitFailed to prevent
+						     future libdecor_new calls which would deadlock on GTK's g_once mechanism */
+						if (!libdecorHasWorkingPlugins) {
+							decorInitFailed = RGFW_TRUE;
+							RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "libdecor in fallback mode (no plugins) - disabling for future windows");
+						}
 						
 						RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "Window created with libdecor decorations");
 						RGFW_UNUSED(name);
