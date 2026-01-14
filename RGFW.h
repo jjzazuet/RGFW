@@ -8808,14 +8808,14 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 			if (_RGFW->decorContext) {
 				win->src.decorFrame = libdecor_decorate(_RGFW->decorContext, win->src.surface, &frameInterface, win);
 				if (!win->src.decorFrame) {
-					RGFW_sendDebugInfo(RGFW_typeError, RGFW_errWayland, "libdecor_decorate failed - no decoration plugin available");
+					RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "libdecor_decorate failed - no decoration plugin available, falling back to borderless window");
 					#ifdef RGFW_LIBDECOR_REQUIRED
 						/* Fail if libdecor decorations are required */
 						wl_surface_destroy(win->src.surface);
 						wl_surface_destroy(win->src.custom_cursor_surface);
 						return NULL;
 					#endif
-					/* Fall through to manual xdg-shell creation (borderless) */
+					/* Continue to manual xdg-shell creation (borderless) */
 				} else {
 					libdecor_frame_set_app_id(win->src.decorFrame, "RGFW-application");
 					libdecor_frame_set_title(win->src.decorFrame, (const char*)name);
@@ -8835,7 +8835,7 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 					return win; /* libdecor manages xdg-shell, skip manual creation */
 				}
 			} else {
-				RGFW_sendDebugInfo(RGFW_typeError, RGFW_errWayland, "libdecor_new failed - libdecor not available");
+				RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "libdecor_new failed - falling back to borderless window");
 				#ifdef RGFW_LIBDECOR_REQUIRED
 					/* Fail if libdecor decorations are required */
 					wl_surface_destroy(win->src.surface);
@@ -8845,6 +8845,9 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 			}
 		#endif
 	}
+	
+	/* Borderless fallback - log when falling back from libdecor */
+	RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "Creating borderless window (no decorations)");
 
 	/* Manual xdg-shell creation (for xdg-decoration protocol or borderless) */
 	static const struct xdg_surface_listener xdg_surface_listener = {
