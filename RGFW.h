@@ -2772,6 +2772,7 @@ RGFWDEF RGFW_info* RGFW_getInfo(void);
 
 		#include <wayland-client.h>
 		#include <errno.h>
+		#include <poll.h>
 	#endif
 
 	struct RGFW_nativeImage {
@@ -8918,12 +8919,40 @@ void RGFW_FUNC(RGFW_pollEvents) (void) {
 		}
 	}
 
-	/* read the events; if empty this reads from the */
-	/* wayland file descriptor */
-	if (wl_display_dispatch(_RGFW->wl_display) == -1) {
+	/* Read events from wayland file descriptor (non-blocking) */
+	/* This only processes events that are already available */
+	if (wl_display_dispatch_pending(_RGFW->wl_display) == -1) {
 		return;
 	}
 
+	/* Optionally prepare to read more events without blocking */
+	while (wl_display_prepare_read(_RGFW->wl_display) != 0) {
+		/* Another thread is reading, dispatch pending events */
+		wl_display_dispatch_pending(_RGFW->wl_display);
+	}
+
+	/* Check if there are events available without blocking */
+	if (wl_display_flush(_RGFW->wl_display) == -1) {
+		wl_display_cancel_read(_RGFW->wl_display);
+		return;
+	}
+
+	/* Read events from fd (non-blocking poll) */
+	struct pollfd fds[1];
+	fds[0].fd = wl_display_get_fd(_RGFW->wl_display);
+	fds[0].events = POLLIN;
+	
+	if (poll(fds, 1, 0) > 0) {
+		/* Events available, read them */
+		if (wl_display_read_events(_RGFW->wl_display) == -1) {
+			return;
+		}
+		/* Dispatch the events we just read */
+		wl_display_dispatch_pending(_RGFW->wl_display);
+	} else {
+		/* No events, cancel the read */
+		wl_display_cancel_read(_RGFW->wl_display);
+	}
 }
 
 void RGFW_FUNC(RGFW_window_move) (RGFW_window* win, i32 x, i32 y) {
