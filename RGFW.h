@@ -9362,10 +9362,16 @@ void RGFW_FUNC(RGFW_window_swapInterval_OpenGL) (RGFW_window* win, i32 swapInter
 void RGFW_FUNC(RGFW_window_closePlatform)(RGFW_window* win) {
 	RGFW_ASSERT(win != NULL);
 	RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "a window was freed");
+	
 	#ifdef RGFW_LIBDECOR
 		if (win->src.decorFrame) {
+			/* libdecor owns the xdg_surface and xdg_toplevel it created,
+			   so we must NOT destroy them manually - libdecor will handle cleanup */
 			libdecor_frame_unref(win->src.decorFrame);
 			win->src.decorFrame = NULL;
+			/* Clear these so we don't double-free them below */
+			win->src.xdg_surface = NULL;
+			win->src.xdg_toplevel = NULL;
 		}
 	#endif
 
@@ -9387,7 +9393,9 @@ void RGFW_FUNC(RGFW_window_closePlatform)(RGFW_window* win) {
 		xdg_toplevel_icon_v1_destroy(win->src.icon);
 	}
 
-	xdg_surface_destroy(win->src.xdg_surface);
+	if (win->src.xdg_surface) {
+		xdg_surface_destroy(win->src.xdg_surface);
+	}
 	wl_surface_destroy(win->src.surface);
 }
 
