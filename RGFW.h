@@ -2839,7 +2839,6 @@ RGFWDEF RGFW_info* RGFW_getInfo(void);
 		struct wl_data_source *data_source; // offer data to other clients
 
 		#ifdef RGFW_LIBDECOR
-			struct libdecor* decorContext;
 			struct libdecor_frame* decorFrame;
 		#endif
 #endif /* RGFW_WAYLAND */
@@ -3036,6 +3035,9 @@ struct RGFW_info {
         RGFW_window* kbOwner;
 		RGFW_window* mouseOwner; /* what window has access to the mouse */
 
+		#ifdef RGFW_LIBDECOR
+			struct libdecor* decorContext; /* Global libdecor context for all windows */
+		#endif
     #endif
 
     RGFW_monitors monitors;
@@ -8584,6 +8586,13 @@ i32 RGFW_initPlatform_Wayland(void) {
 }
 
 void RGFW_deinitPlatform_Wayland(void) {
+	#ifdef RGFW_LIBDECOR
+		if (_RGFW->decorContext) {
+			libdecor_unref(_RGFW->decorContext);
+			_RGFW->decorContext = NULL;
+		}
+	#endif
+
 	if (_RGFW->clipboard) {
 		RGFW_FREE(_RGFW->clipboard);
 		_RGFW->clipboard = NULL;
@@ -8791,13 +8800,15 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 				.dismiss_popup = RGFW_wl_libdecor_dismiss_popup,
 			};
 
-			win->src.decorContext = libdecor_new(_RGFW->wl_display, &interface);
-			if (win->src.decorContext) {
-				win->src.decorFrame = libdecor_decorate(win->src.decorContext, win->src.surface, &frameInterface, win);
+			/* Initialize global libdecor context once */
+			if (_RGFW->decorContext == NULL) {
+				_RGFW->decorContext = libdecor_new(_RGFW->wl_display, &interface);
+			}
+			
+			if (_RGFW->decorContext) {
+				win->src.decorFrame = libdecor_decorate(_RGFW->decorContext, win->src.surface, &frameInterface, win);
 				if (!win->src.decorFrame) {
 					RGFW_sendDebugInfo(RGFW_typeError, RGFW_errWayland, "libdecor_decorate failed - no decoration plugin available");
-					libdecor_unref(win->src.decorContext);
-					win->src.decorContext = NULL;
 					#ifdef RGFW_LIBDECOR_REQUIRED
 						/* Fail if libdecor decorations are required */
 						wl_surface_destroy(win->src.surface);
@@ -8953,6 +8964,13 @@ void RGFW_FUNC(RGFW_pollEvents) (void) {
 		/* No events, cancel the read */
 		wl_display_cancel_read(_RGFW->wl_display);
 	}
+
+	#ifdef RGFW_LIBDECOR
+		/* Dispatch libdecor events for decoration updates (non-blocking) */
+		if (_RGFW->decorContext != NULL) {
+			libdecor_dispatch(_RGFW->decorContext, 0);
+		}
+	#endif
 }
 
 void RGFW_FUNC(RGFW_window_move) (RGFW_window* win, i32 x, i32 y) {
@@ -9345,8 +9363,10 @@ void RGFW_FUNC(RGFW_window_closePlatform)(RGFW_window* win) {
 	RGFW_ASSERT(win != NULL);
 	RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "a window was freed");
 	#ifdef RGFW_LIBDECOR
-		if (win->src.decorContext)
-			libdecor_unref(win->src.decorContext);
+		if (win->src.decorFrame) {
+			libdecor_frame_unref(win->src.decorFrame);
+			win->src.decorFrame = NULL;
+		}
 	#endif
 
 	if (win->src.decoration) {
