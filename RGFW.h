@@ -3037,6 +3037,7 @@ struct RGFW_info {
 
 		#ifdef RGFW_LIBDECOR
 			struct libdecor* decorContext; /* Global libdecor context for all windows */
+			i32 decorWindowCount; /* Number of windows with active libdecor frames */
 		#endif
     #endif
 
@@ -8824,15 +8825,28 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 					win->src.xdg_surface = libdecor_frame_get_xdg_surface(win->src.decorFrame);
 					win->src.xdg_toplevel = libdecor_frame_get_xdg_toplevel(win->src.decorFrame);
 					
-					/* Map the frame */
-					libdecor_frame_map(win->src.decorFrame);
-					
-					/* Process initial configuration */
-					wl_display_roundtrip(_RGFW->wl_display);
-					
-					RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "Window created with libdecor decorations");
-					RGFW_UNUSED(name);
-					return win; /* libdecor manages xdg-shell, skip manual creation */
+					/* Verify libdecor actually provided valid surfaces (not dummy mode) */
+					if (win->src.xdg_surface == NULL || win->src.xdg_toplevel == NULL) {
+						RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "libdecor returned dummy frame (no plugins), falling back to borderless");
+						libdecor_frame_unref(win->src.decorFrame);
+						win->src.decorFrame = NULL;
+						win->src.xdg_surface = NULL;
+						win->src.xdg_toplevel = NULL;
+						/* Fall through to manual xdg-shell creation */
+					} else {
+						/* Map the frame */
+						libdecor_frame_map(win->src.decorFrame);
+						
+						/* Increment decorated window count for event dispatching */
+						_RGFW->decorWindowCount++;
+						
+						/* Process initial configuration */
+						wl_display_roundtrip(_RGFW->wl_display);
+						
+						RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "Window created with libdecor decorations");
+						RGFW_UNUSED(name);
+						return win; /* libdecor manages xdg-shell, skip manual creation */
+					}
 				}
 			} else {
 				RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "libdecor_new failed - falling back to borderless window");
@@ -8969,8 +8983,8 @@ void RGFW_FUNC(RGFW_pollEvents) (void) {
 	}
 
 	#ifdef RGFW_LIBDECOR
-		/* Dispatch libdecor events for decoration updates (non-blocking) */
-		if (_RGFW->decorContext != NULL) {
+		/* Dispatch libdecor events only if there are windows with active decoration frames */
+		if (_RGFW->decorContext != NULL && _RGFW->decorWindowCount > 0) {
 			libdecor_dispatch(_RGFW->decorContext, 0);
 		}
 	#endif
@@ -9375,6 +9389,10 @@ void RGFW_FUNC(RGFW_window_closePlatform)(RGFW_window* win) {
 			/* Clear these so we don't double-free them below */
 			win->src.xdg_surface = NULL;
 			win->src.xdg_toplevel = NULL;
+			/* Decrement decorated window count */
+			if (_RGFW->decorWindowCount > 0) {
+				_RGFW->decorWindowCount--;
+			}
 		}
 	#endif
 
