@@ -7816,6 +7816,10 @@ Wayland TODO: (out of date)
 struct wl_display* RGFW_getDisplay_Wayland(void) { return _RGFW->wl_display; }
 struct wl_surface* RGFW_window_getWindow_Wayland(RGFW_window* win) { return win->src.surface; }
 
+/* HiDPI scale accessors for FFI bindings */
+float RGFW_window_getScaleX(RGFW_window* win) { return win->scaleX; }
+float RGFW_window_getScaleY(RGFW_window* win) { return win->scaleY; }
+
 
 /* wayland global garbage (wayland bad, X11 is fine (ish) (not really)) */
 #include "xdg-shell.h"
