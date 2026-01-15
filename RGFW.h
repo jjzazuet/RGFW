@@ -9158,10 +9158,14 @@ void RGFW_FUNC(RGFW_window_resize) (RGFW_window* win, i32 w, i32 h) {
 		/* Auto-update viewport destination so swapchain fills window */
 		if (win->src.viewport && _RGFW->viewporter) {
 			wp_viewport_set_destination(win->src.viewport, win->w, win->h);
-			RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_errWayland, "Viewport destination set: %dx%d", win->w, win->h);
+			RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_errWayland, "Viewport destination set");
 		} else {
-			RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "Viewport or viewporter is NULL - cannot set destination (viewport=%p, viewporter=%p)", 
-				(void*)win->src.viewport, (void*)_RGFW->viewporter);
+			if (!win->src.viewport) {
+				RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "win->src.viewport is NULL - cannot set destination");
+			}
+			if (!_RGFW->viewporter) {
+				RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "_RGFW->viewporter is NULL - cannot set destination");
+			}
 		}
 		
 		wl_surface_commit(win->src.surface); /* Commit changes to make compositor apply them */
