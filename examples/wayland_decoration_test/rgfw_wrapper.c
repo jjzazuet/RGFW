@@ -1,0 +1,5 @@
+#define RGFW_IMPLEMENTATION
+#define RGFW_WAYLAND
+#define RGFW_LIBDECOR
+#define RGFW_VULKAN
+#include "RGFW.h"

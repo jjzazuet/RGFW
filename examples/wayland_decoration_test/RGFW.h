@@ -1695,24 +1695,6 @@ RGFWDEF void RGFW_window_moveToMonitor(RGFW_window* win, RGFW_monitor m);
 RGFWDEF void RGFW_window_resize(RGFW_window* win, i32 w, i32 h);
 
 /**!
- * @brief sets viewport destination for HiDPI swapchain scaling on Wayland
- * 
- * Call this after creating a HiDPI swapchain to tell Wayland to scale the
- * physical buffer down to logical window dimensions.
- * 
- * Example:
- *   Logical window: 900×600
- *   Display scale: 2.74x
- *   Swapchain (physical): 2466×1644
- *   Call: RGFW_window_setViewportDestination(win, 900, 600);
- *   
- * @param win a pointer to the target window
- * @param logicalWidth the logical window width
- * @param logicalHeight the logical window height
-*/
-RGFWDEF void RGFW_window_setViewportDestination(RGFW_window* win, i32 logicalWidth, i32 logicalHeight);
-
-/**!
  * @brief sets the aspect ratio of the window
  * @param win a pointer to the target window
  * @param w the width ratio
@@ -2854,16 +2836,13 @@ RGFWDEF RGFW_info* RGFW_getInfo(void);
 
 		RGFW_monitor active_monitor;
 
-	struct wl_data_source *data_source; // offer data to other clients
+		struct wl_data_source *data_source; // offer data to other clients
 
-	struct wp_fractional_scale_v1* fractional_scale;
-	struct wp_viewport* viewport;
-
-	#ifdef RGFW_LIBDECOR
-		struct libdecor_frame* decorFrame;
-	#endif
+		#ifdef RGFW_LIBDECOR
+			struct libdecor_frame* decorFrame;
+		#endif
 #endif /* RGFW_WAYLAND */
-};
+	};
 
 #elif defined(RGFW_MACOS)
 
@@ -2939,7 +2918,6 @@ struct RGFW_window {
 	RGFW_windowInternal internal; /*!< internal window data that is not specific to the OS */
 	void* userPtr; /* ptr for usr data */
 	i32 x, y, w, h; /*!< position and size of the window */
-	float scaleX, scaleY; /*!< HiDPI scale factors (1.0 = no scaling, 3.0 = 3x) */
 }; /*!< window structure for the window */
 
 typedef struct RGFW_windowState {
@@ -3056,9 +3034,6 @@ struct RGFW_info {
 
         RGFW_window* kbOwner;
 		RGFW_window* mouseOwner; /* what window has access to the mouse */
-
-		struct wp_fractional_scale_manager_v1* fractional_scale_manager;
-		struct wp_viewporter* viewporter;
 
 		#ifdef RGFW_LIBDECOR
 			struct libdecor* decorContext; /* Global libdecor context for all windows */
@@ -7834,10 +7809,6 @@ Wayland TODO: (out of date)
 struct wl_display* RGFW_getDisplay_Wayland(void) { return _RGFW->wl_display; }
 struct wl_surface* RGFW_window_getWindow_Wayland(RGFW_window* win) { return win->src.surface; }
 
-/* HiDPI scale accessors for FFI bindings */
-float RGFW_window_getScaleX(RGFW_window* win) { return win->scaleX; }
-float RGFW_window_getScaleY(RGFW_window* win) { return win->scaleY; }
-
 
 /* wayland global garbage (wayland bad, X11 is fine (ish) (not really)) */
 #include "xdg-shell.h"
@@ -7846,33 +7817,6 @@ float RGFW_window_getScaleY(RGFW_window* win) { return win->scaleY; }
 #include "relative-pointer-unstable-v1.h"
 #include "pointer-constraints-unstable-v1.h"
 #include "xdg-output-unstable-v1.h"
-#include "fractional-scale-v1.h"
-#include "viewporter.h"
-
-
-// Fractional scale listener for HiDPI support
-static void fractional_scale_preferred_scale(
-	void* data,
-	struct wp_fractional_scale_v1* fractional_scale,
-	uint32_t scale_120)
-{
-	RGFW_UNUSED(fractional_scale);
-	RGFW_window* win = (RGFW_window*)data;
-	if (!win) return;
-	
-	// fractional-scale-v1 protocol uses fixed-point: scale * 120
-	// e.g., 3.0x scale = 360, 1.5x scale = 180
-	float scale = scale_120 / 120.0f;
-	
-	if (win->scaleX != scale || win->scaleY != scale) {
-		win->scaleX = win->scaleY = scale;
-		RGFW_scaleUpdatedCallback(win, scale, scale);
-	}
-}
-
-static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
-	.preferred_scale = fractional_scale_preferred_scale,
-};
 
 
 void RGFW_toggleWaylandMaximized(RGFW_window* win, RGFW_bool maximized);
@@ -8520,10 +8464,6 @@ static void RGFW_wl_global_registry_handler(void* data, struct wl_registry *regi
 		RGFW_wl_create_outputs(registry, id);
 	} else if (RGFW_STRNCMP(interface,"wl_data_device_manager", 23) == 0) {
 		RGFW->data_device_manager = wl_registry_bind(registry, id, &wl_data_device_manager_interface, 1);
-	} else if (RGFW_STRNCMP(interface, wp_fractional_scale_manager_v1_interface.name, 255) == 0) {
-		RGFW->fractional_scale_manager = wl_registry_bind(registry, id, &wp_fractional_scale_manager_v1_interface, 1);
-	} else if (RGFW_STRNCMP(interface, wp_viewporter_interface.name, 255) == 0) {
-		RGFW->viewporter = wl_registry_bind(registry, id, &wp_viewporter_interface, 1);
 	}
 }
 
@@ -8705,16 +8645,6 @@ void RGFW_deinitPlatform_Wayland(void) {
 		zxdg_output_manager_v1_destroy(_RGFW->xdg_output_manager);
 	}
 
-	if (_RGFW->fractional_scale_manager) {
-		wp_fractional_scale_manager_v1_destroy(_RGFW->fractional_scale_manager);
-		_RGFW->fractional_scale_manager = NULL;
-	}
-
-	if (_RGFW->viewporter) {
-		wp_viewporter_destroy(_RGFW->viewporter);
-		_RGFW->viewporter = NULL;
-	}
-
 	if (_RGFW->data_device_manager) {
 		wl_data_device_manager_destroy(_RGFW->data_device_manager);
 	}
@@ -8868,37 +8798,6 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 	win->src.surface = wl_compositor_create_surface(_RGFW->compositor);
 	wl_surface_add_listener(win->src.surface, &wl_surface_listener, win);
 
-	/* Initialize HiDPI scale to 1.0 (will be updated by fractional-scale callback) */
-	win->scaleX = 1.0f;
-	win->scaleY = 1.0f;
-	
-	/* Request fractional scale updates for HiDPI support */
-	if (_RGFW->fractional_scale_manager) {
-		win->src.fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(
-			_RGFW->fractional_scale_manager,
-			win->src.surface
-		);
-		if (win->src.fractional_scale) {
-			wp_fractional_scale_v1_add_listener(
-				win->src.fractional_scale,
-				&fractional_scale_listener,
-				win
-			);
-		}
-	}
-	
-	/* Create viewport for HiDPI scaling support */
-	if (_RGFW->viewporter) {
-		win->src.viewport = wp_viewporter_get_viewport(
-			_RGFW->viewporter,
-			win->src.surface
-		);
-		/* Set initial logical size (before HiDPI swapchain is created) */
-		if (win->src.viewport) {
-			wp_viewport_set_destination(win->src.viewport, win->w, win->h);
-		}
-	}
-
 	/* create a surface for a custom cursor */
 	win->src.custom_cursor_surface = wl_compositor_create_surface(_RGFW->compositor);
 
@@ -8980,21 +8879,11 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 						if (!libdecorHasWorkingPlugins) {
 							decorInitFailed = RGFW_TRUE;
 							RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "libdecor in fallback mode (no plugins) - disabling for future windows");
-				}
-				
-				RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "Window created with libdecor decorations");
-				RGFW_UNUSED(name);
-				
-				/* Explicitly fire scale callback with initial values if not already fired.
-				   For libdecor windows, the scale event may arrive during wl_display_roundtrip.
-				   If scale is still 1.0, the event didn't arrive, so fire callback explicitly.
-				   This ensures applications always receive initial scale notification. */
-				if (win->scaleX == 1.0f && win->scaleY == 1.0f) {
-					/* Scale event never arrived - fire callback with default 1.0 scale */
-					RGFW_scaleUpdatedCallback(win, 1.0f, 1.0f);
-				}
-				
-				return win; /* libdecor manages xdg-shell, skip manual creation */
+						}
+						
+						RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "Window created with libdecor decorations");
+						RGFW_UNUSED(name);
+						return win; /* libdecor manages xdg-shell, skip manual creation */
 					}
 				}
 			} else {
@@ -9154,35 +9043,12 @@ void RGFW_FUNC(RGFW_window_resize) (RGFW_window* win, i32 w, i32 h) {
 	win->h = h;
 	if (_RGFW->compositor) {
 		xdg_surface_set_window_geometry(win->src.xdg_surface, 0, 0, win->w, win->h);
-		
-		/* Auto-update viewport destination so swapchain fills window */
-		if (win->src.viewport && _RGFW->viewporter) {
-			wp_viewport_set_destination(win->src.viewport, win->w, win->h);
-			RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_errWayland, "Viewport destination set: %dx%d", win->w, win->h);
-		} else {
-			RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "Viewport or viewporter is NULL - cannot set destination (viewport=%p, viewporter=%p)", 
-				(void*)win->src.viewport, (void*)_RGFW->viewporter);
-		}
-		
 		wl_surface_commit(win->src.surface); /* Commit changes to make compositor apply them */
 		#ifdef RGFW_OPENGL
 		if (win->src.ctx.egl)
 			wl_egl_window_resize(win->src.ctx.egl->eglWindow, (i32)w, (i32)h, 0, 0);
 		#endif
 	}
-}
-
-void RGFW_FUNC(RGFW_window_setViewportDestination) (RGFW_window* win, i32 logicalWidth, i32 logicalHeight) {
-	RGFW_ASSERT(win != NULL);
-	#ifdef RGFW_WAYLAND
-	if (win->src.viewport && _RGFW->viewporter) {
-		wp_viewport_set_destination(win->src.viewport, logicalWidth, logicalHeight);
-		wl_surface_commit(win->src.surface); /* Commit viewport changes */
-	}
-	#else
-	RGFW_UNUSED(logicalWidth);
-	RGFW_UNUSED(logicalHeight);
-	#endif
 }
 
 void RGFW_FUNC(RGFW_window_setAspectRatio) (RGFW_window* win, i32 w, i32 h) {
@@ -9569,16 +9435,6 @@ void RGFW_FUNC(RGFW_window_closePlatform)(RGFW_window* win) {
 			}
 		}
 	#endif
-
-	/* Clean up HiDPI scale objects */
-	if (win->src.fractional_scale) {
-		wp_fractional_scale_v1_destroy(win->src.fractional_scale);
-		win->src.fractional_scale = NULL;
-	}
-	if (win->src.viewport) {
-		wp_viewport_destroy(win->src.viewport);
-		win->src.viewport = NULL;
-	}
 
 	if (win->src.decoration) {
 		zxdg_toplevel_decoration_v1_destroy(win->src.decoration);
