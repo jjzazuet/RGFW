@@ -8032,8 +8032,12 @@ static void RGFW_wl_libdecor_configure(struct libdecor_frame *frame,
 		libdecor_state_free(state);
 	}
 
-	/* Update window geometry and viewport destination for libdecor windows */
-	RGFW_window_resize(win, width, height);
+	/* Update viewport destination for HiDPI scaling (libdecor manages geometry itself) */
+	if (win->src.viewport && _RGFW->viewporter) {
+		wp_viewport_set_destination(win->src.viewport, width, height);
+		wl_surface_commit(win->src.surface);
+		RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_errWayland, "Viewport destination set (libdecor)");
+	}
 
 	/* Trigger resize callback directly for libdecor windows.
 	   Unlike xdg-shell windows, libdecor doesn't go through the xdg_surface configure handler,
