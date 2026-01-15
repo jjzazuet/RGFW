@@ -7842,8 +7842,6 @@ static void fractional_scale_preferred_scale(
 	// e.g., 3.0x scale = 360, 1.5x scale = 180
 	float scale = scale_120 / 120.0f;
 	
-	RGFW_INFO(2, 14, "Scale update received: %.2fx (was %.2fx)", scale, win->scaleX);
-	
 	if (win->scaleX != scale || win->scaleY != scale) {
 		win->scaleX = win->scaleY = scale;
 		RGFW_scaleUpdatedCallback(win, scale, scale);
@@ -8502,10 +8500,8 @@ static void RGFW_wl_global_registry_handler(void* data, struct wl_registry *regi
 		RGFW->data_device_manager = wl_registry_bind(registry, id, &wl_data_device_manager_interface, 1);
 	} else if (RGFW_STRNCMP(interface, wp_fractional_scale_manager_v1_interface.name, 255) == 0) {
 		RGFW->fractional_scale_manager = wl_registry_bind(registry, id, &wp_fractional_scale_manager_v1_interface, 1);
-		RGFW_INFO(2, 14, "Bound fractional scale manager v1");
 	} else if (RGFW_STRNCMP(interface, wp_viewporter_interface.name, 255) == 0) {
 		RGFW->viewporter = wl_registry_bind(registry, id, &wp_viewporter_interface, 1);
-		RGFW_INFO(2, 14, "Bound viewporter");
 	}
 }
 
@@ -8866,7 +8862,6 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 				&fractional_scale_listener,
 				win
 			);
-			RGFW_INFO(2, 14, "Fractional scale listener registered");
 		}
 	}
 	
@@ -8876,9 +8871,6 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 			_RGFW->viewporter,
 			win->src.surface
 		);
-		if (win->src.viewport) {
-			RGFW_INFO(2, 14, "Viewport created for surface");
-		}
 	}
 
 	/* create a surface for a custom cursor */
