@@ -8954,11 +8954,20 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 						if (!libdecorHasWorkingPlugins) {
 							decorInitFailed = RGFW_TRUE;
 							RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "libdecor in fallback mode (no plugins) - disabling for future windows");
-						}
-						
-						RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "Window created with libdecor decorations");
-						RGFW_UNUSED(name);
-						return win; /* libdecor manages xdg-shell, skip manual creation */
+					}
+					
+					RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_infoWindow, "Window created with libdecor decorations");
+					RGFW_UNUSED(name);
+					
+					/* Explicitly fire scale callback with initial values.
+					   For libdecor windows, the scale event arrives during wl_display_roundtrip
+					   before user event loops start, so Java listeners might miss it.
+					   This ensures applications always receive initial scale notification. */
+					if (win->scaleX > 0.0f) {
+						RGFW_scaleUpdatedCallback(win, win->scaleX, win->scaleY);
+					}
+					
+					return win; /* libdecor manages xdg-shell, skip manual creation */
 					}
 				}
 			} else {
