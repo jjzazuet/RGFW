@@ -10,6 +10,14 @@
 #include <stdio.h>
 #include <unistd.h>
 
+// Callback for HiDPI scale changes
+void onScaleUpdated(RGFW_window* win, float scaleX, float scaleY) {
+    printf("🔍 HiDPI Scale Update: %.2fx (width) x %.2fx (height)\n", scaleX, scaleY);
+    printf("   Window size: %dx%d logical pixels\n", win->w, win->h);
+    printf("   Expected buffer size: %dx%d physical pixels\n", 
+           (int)(win->w * scaleX), (int)(win->h * scaleY));
+}
+
 int test_window(int window_num) {
     char title[64];
     snprintf(title, sizeof(title), "Test Window %d", window_num);
@@ -23,7 +31,11 @@ int test_window(int window_num) {
         return 1;
     }
     
+    // Set the scale update callback
+    RGFW_setScaleUpdatedCallback(onScaleUpdated);
+    
     printf("Window %d created successfully!\n", window_num);
+    printf("Initial scale: %.2fx x %.2fx\n", win->scaleX, win->scaleY);
     printf("Running for 2 seconds...\n");
     
     RGFW_event event;
@@ -41,6 +53,7 @@ int test_window(int window_num) {
     
 cleanup:
     printf("Closing window %d...\n", window_num);
+    printf("Final scale: %.2fx x %.2fx\n", win->scaleX, win->scaleY);
     RGFW_window_close(win);
     printf("Window %d closed.\n", window_num);
     
