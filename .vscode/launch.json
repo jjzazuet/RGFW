@@ -2,19 +2,17 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug libdecor_test (GDB)",
+            "name": "Debug examples/wayland_decoration_test/libdecor_multi_test (GDB)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/examples/wayland_decoration_test/libdecor_test",
+            "program": "${workspaceFolder}/examples/wayland_decoration_test/libdecor_multi_test",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/examples/wayland_decoration_test",
-            "environment": [
-                {
-                    "name": "WAYLAND_DEBUG",
-                    "value": "0"
-                }
-            ],
+"environment": [
+    {"name": "GTK_MODULES", "value": "invalid_module"},
+    {"name": "GDK_BACKEND", "value": "invalid"}
+],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
