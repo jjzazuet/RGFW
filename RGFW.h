@@ -8896,7 +8896,12 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 		/* Set initial logical size (before HiDPI swapchain is created) */
 		if (win->src.viewport) {
 			wp_viewport_set_destination(win->src.viewport, win->w, win->h);
+			RGFW_sendDebugInfo(RGFW_typeInfo, RGFW_errWayland, "Viewport created and initial destination set");
+		} else {
+			RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "Failed to create viewport from viewporter");
 		}
+	} else {
+		RGFW_sendDebugInfo(RGFW_typeWarning, RGFW_errWayland, "No viewporter available - viewport not created");
 	}
 
 	/* create a surface for a custom cursor */
