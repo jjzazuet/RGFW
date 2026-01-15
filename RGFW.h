@@ -1695,6 +1695,24 @@ RGFWDEF void RGFW_window_moveToMonitor(RGFW_window* win, RGFW_monitor m);
 RGFWDEF void RGFW_window_resize(RGFW_window* win, i32 w, i32 h);
 
 /**!
+ * @brief sets viewport destination for HiDPI swapchain scaling on Wayland
+ * 
+ * Call this after creating a HiDPI swapchain to tell Wayland to scale the
+ * physical buffer down to logical window dimensions.
+ * 
+ * Example:
+ *   Logical window: 900×600
+ *   Display scale: 2.74x
+ *   Swapchain (physical): 2466×1644
+ *   Call: RGFW_window_setViewportDestination(win, 900, 600);
+ *   
+ * @param win a pointer to the target window
+ * @param logicalWidth the logical window width
+ * @param logicalHeight the logical window height
+*/
+RGFWDEF void RGFW_window_setViewportDestination(RGFW_window* win, i32 logicalWidth, i32 logicalHeight);
+
+/**!
  * @brief sets the aspect ratio of the window
  * @param win a pointer to the target window
  * @param w the width ratio
@@ -8875,6 +8893,10 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 			_RGFW->viewporter,
 			win->src.surface
 		);
+		/* Set initial logical size (before HiDPI swapchain is created) */
+		if (win->src.viewport) {
+			wp_viewport_set_destination(win->src.viewport, win->w, win->h);
+		}
 	}
 
 	/* create a surface for a custom cursor */
@@ -9138,6 +9160,19 @@ void RGFW_FUNC(RGFW_window_resize) (RGFW_window* win, i32 w, i32 h) {
 			wl_egl_window_resize(win->src.ctx.egl->eglWindow, (i32)w, (i32)h, 0, 0);
 		#endif
 	}
+}
+
+void RGFW_FUNC(RGFW_window_setViewportDestination) (RGFW_window* win, i32 logicalWidth, i32 logicalHeight) {
+	RGFW_ASSERT(win != NULL);
+	#ifdef RGFW_WAYLAND
+	if (win->src.viewport && _RGFW->viewporter) {
+		wp_viewport_set_destination(win->src.viewport, logicalWidth, logicalHeight);
+		wl_surface_commit(win->src.surface); /* Commit viewport changes */
+	}
+	#else
+	RGFW_UNUSED(logicalWidth);
+	RGFW_UNUSED(logicalHeight);
+	#endif
 }
 
 void RGFW_FUNC(RGFW_window_setAspectRatio) (RGFW_window* win, i32 w, i32 h) {
