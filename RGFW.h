@@ -2836,13 +2836,16 @@ RGFWDEF RGFW_info* RGFW_getInfo(void);
 
 		RGFW_monitor active_monitor;
 
-		struct wl_data_source *data_source; // offer data to other clients
+	struct wl_data_source *data_source; // offer data to other clients
 
-		#ifdef RGFW_LIBDECOR
-			struct libdecor_frame* decorFrame;
-		#endif
+	struct wp_fractional_scale_v1* fractional_scale;
+	struct wp_viewport* viewport;
+
+	#ifdef RGFW_LIBDECOR
+		struct libdecor_frame* decorFrame;
+	#endif
 #endif /* RGFW_WAYLAND */
-	};
+};
 
 #elif defined(RGFW_MACOS)
 
@@ -2918,6 +2921,7 @@ struct RGFW_window {
 	RGFW_windowInternal internal; /*!< internal window data that is not specific to the OS */
 	void* userPtr; /* ptr for usr data */
 	i32 x, y, w, h; /*!< position and size of the window */
+	float scaleX, scaleY; /*!< HiDPI scale factors (1.0 = no scaling, 3.0 = 3x) */
 }; /*!< window structure for the window */
 
 typedef struct RGFW_windowState {
@@ -3034,6 +3038,9 @@ struct RGFW_info {
 
         RGFW_window* kbOwner;
 		RGFW_window* mouseOwner; /* what window has access to the mouse */
+
+		struct wp_fractional_scale_manager_v1* fractional_scale_manager;
+		struct wp_viewporter* viewporter;
 
 		#ifdef RGFW_LIBDECOR
 			struct libdecor* decorContext; /* Global libdecor context for all windows */
@@ -7817,6 +7824,35 @@ struct wl_surface* RGFW_window_getWindow_Wayland(RGFW_window* win) { return win-
 #include "relative-pointer-unstable-v1.h"
 #include "pointer-constraints-unstable-v1.h"
 #include "xdg-output-unstable-v1.h"
+#include "fractional-scale-v1.h"
+#include "viewporter.h"
+
+
+// Fractional scale listener for HiDPI support
+static void fractional_scale_preferred_scale(
+	void* data,
+	struct wp_fractional_scale_v1* fractional_scale,
+	uint32_t scale_120)
+{
+	RGFW_UNUSED(fractional_scale);
+	RGFW_window* win = (RGFW_window*)data;
+	if (!win) return;
+	
+	// fractional-scale-v1 protocol uses fixed-point: scale * 120
+	// e.g., 3.0x scale = 360, 1.5x scale = 180
+	float scale = scale_120 / 120.0f;
+	
+	RGFW_INFO(2, 14, "Scale update received: %.2fx (was %.2fx)", scale, win->scaleX);
+	
+	if (win->scaleX != scale || win->scaleY != scale) {
+		win->scaleX = win->scaleY = scale;
+		RGFW_scaleUpdatedCallback(win, scale, scale);
+	}
+}
+
+static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
+	.preferred_scale = fractional_scale_preferred_scale,
+};
 
 
 void RGFW_toggleWaylandMaximized(RGFW_window* win, RGFW_bool maximized);
@@ -8464,6 +8500,12 @@ static void RGFW_wl_global_registry_handler(void* data, struct wl_registry *regi
 		RGFW_wl_create_outputs(registry, id);
 	} else if (RGFW_STRNCMP(interface,"wl_data_device_manager", 23) == 0) {
 		RGFW->data_device_manager = wl_registry_bind(registry, id, &wl_data_device_manager_interface, 1);
+	} else if (RGFW_STRNCMP(interface, wp_fractional_scale_manager_v1_interface.name, 255) == 0) {
+		RGFW->fractional_scale_manager = wl_registry_bind(registry, id, &wp_fractional_scale_manager_v1_interface, 1);
+		RGFW_INFO(2, 14, "Bound fractional scale manager v1");
+	} else if (RGFW_STRNCMP(interface, wp_viewporter_interface.name, 255) == 0) {
+		RGFW->viewporter = wl_registry_bind(registry, id, &wp_viewporter_interface, 1);
+		RGFW_INFO(2, 14, "Bound viewporter");
 	}
 }
 
@@ -8645,6 +8687,16 @@ void RGFW_deinitPlatform_Wayland(void) {
 		zxdg_output_manager_v1_destroy(_RGFW->xdg_output_manager);
 	}
 
+	if (_RGFW->fractional_scale_manager) {
+		wp_fractional_scale_manager_v1_destroy(_RGFW->fractional_scale_manager);
+		_RGFW->fractional_scale_manager = NULL;
+	}
+
+	if (_RGFW->viewporter) {
+		wp_viewporter_destroy(_RGFW->viewporter);
+		_RGFW->viewporter = NULL;
+	}
+
 	if (_RGFW->data_device_manager) {
 		wl_data_device_manager_destroy(_RGFW->data_device_manager);
 	}
@@ -8797,6 +8849,37 @@ RGFW_window* RGFW_FUNC(RGFW_createWindowPlatform) (const char* name, RGFW_window
 
 	win->src.surface = wl_compositor_create_surface(_RGFW->compositor);
 	wl_surface_add_listener(win->src.surface, &wl_surface_listener, win);
+
+	/* Initialize HiDPI scale to 1.0 (will be updated by fractional-scale callback) */
+	win->scaleX = 1.0f;
+	win->scaleY = 1.0f;
+	
+	/* Request fractional scale updates for HiDPI support */
+	if (_RGFW->fractional_scale_manager) {
+		win->src.fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(
+			_RGFW->fractional_scale_manager,
+			win->src.surface
+		);
+		if (win->src.fractional_scale) {
+			wp_fractional_scale_v1_add_listener(
+				win->src.fractional_scale,
+				&fractional_scale_listener,
+				win
+			);
+			RGFW_INFO(2, 14, "Fractional scale listener registered");
+		}
+	}
+	
+	/* Create viewport for HiDPI scaling support */
+	if (_RGFW->viewporter) {
+		win->src.viewport = wp_viewporter_get_viewport(
+			_RGFW->viewporter,
+			win->src.surface
+		);
+		if (win->src.viewport) {
+			RGFW_INFO(2, 14, "Viewport created for surface");
+		}
+	}
 
 	/* create a surface for a custom cursor */
 	win->src.custom_cursor_surface = wl_compositor_create_surface(_RGFW->compositor);
@@ -9435,6 +9518,16 @@ void RGFW_FUNC(RGFW_window_closePlatform)(RGFW_window* win) {
 			}
 		}
 	#endif
+
+	/* Clean up HiDPI scale objects */
+	if (win->src.fractional_scale) {
+		wp_fractional_scale_v1_destroy(win->src.fractional_scale);
+		win->src.fractional_scale = NULL;
+	}
+	if (win->src.viewport) {
+		wp_viewport_destroy(win->src.viewport);
+		win->src.viewport = NULL;
+	}
 
 	if (win->src.decoration) {
 		zxdg_toplevel_decoration_v1_destroy(win->src.decoration);
