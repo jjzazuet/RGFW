@@ -24,15 +24,16 @@ int test_window(int window_num) {
     
     printf("\n=== Creating window %d ===\n", window_num);
     
+    // Set the scale update callback BEFORE creating window
+    // (callback may fire during window creation for libdecor windows)
+    RGFW_setScaleUpdatedCallback(onScaleUpdated);
+    
     RGFW_window* win = RGFW_createWindow(title, 100 + (window_num * 50), 100 + (window_num * 50), 640, 480, 0);
     
     if (!win) {
         fprintf(stderr, "ERROR: Failed to create window %d\n", window_num);
         return 1;
     }
-    
-    // Set the scale update callback
-    RGFW_setScaleUpdatedCallback(onScaleUpdated);
     
     printf("Window %d created successfully!\n", window_num);
     printf("Initial scale: %.2fx x %.2fx\n", win->scaleX, win->scaleY);
