@@ -9154,6 +9154,12 @@ void RGFW_FUNC(RGFW_window_resize) (RGFW_window* win, i32 w, i32 h) {
 	win->h = h;
 	if (_RGFW->compositor) {
 		xdg_surface_set_window_geometry(win->src.xdg_surface, 0, 0, win->w, win->h);
+		
+		/* Auto-update viewport destination so swapchain fills window */
+		if (win->src.viewport && _RGFW->viewporter) {
+			wp_viewport_set_destination(win->src.viewport, win->w, win->h);
+		}
+		
 		wl_surface_commit(win->src.surface); /* Commit changes to make compositor apply them */
 		#ifdef RGFW_OPENGL
 		if (win->src.ctx.egl)
